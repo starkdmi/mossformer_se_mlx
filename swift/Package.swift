@@ -12,11 +12,15 @@ let package = Package(
         .library(
             name: "Mossformer2MLXSwift",
             targets: ["Mossformer2MLXSwift"]),
+        .executable(
+            name: "generate",
+            targets: ["Generate"]),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.18.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.0.0"),
-        .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.0.0")
+        .package(url: "https://github.com/starkdmi/SwiftAudio", exact: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.2.0")
     ],
     targets: [
         .target(
@@ -28,13 +32,18 @@ let package = Package(
                 .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "AudioUtils", package: "SwiftAudio")
             ]),
-        .testTarget(
-            name: "Mossformer2MLXSwiftTests",
+        .executableTarget(
+            name: "Generate",
             dependencies: [
                 "Mossformer2MLXSwift",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
                 .product(name: "AudioUtils", package: "SwiftAudio"),
-                .product(name: "Hub", package: "swift-transformers")
-            ]
-        ),
+                .product(name: "Hub", package: "swift-transformers"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ],
+            path: "Sources/Generate"
+        )
     ]
 )

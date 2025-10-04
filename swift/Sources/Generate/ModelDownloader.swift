@@ -18,7 +18,11 @@ class ModelDownloader {
     }
 
     private let modelId = "starkdmi/MossFormer2_SE_48K_MLX"
-    private let weightsFilename = "model_fp32.safetensors" // model_fp16.safetensors
+    private let weightsFilename: String
+
+    init(precision: String = "fp32") {
+        self.weightsFilename = "model_\(precision).safetensors"
+    }
 
     /// Downloads model weights from HuggingFace
     /// - Returns: Path to weights file
