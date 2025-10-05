@@ -281,8 +281,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example usage:
-  python demo.py --input noisy.wav --output clean.wav
-  python demo.py --input noisy.wav --output clean.wav --precision fp16
+  python generate.py --input noisy.wav --output clean.wav
+  python generate.py --input noisy.wav --output clean.wav --precision fp16
         """
     )
     parser.add_argument("--input", "-i", type=str, required=True,

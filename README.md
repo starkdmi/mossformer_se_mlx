@@ -9,7 +9,7 @@ Speaker enhancement models for extracting speech from noisy audio using MLX.
 ```bash
 cd python
 pip install -r requirements.txt
-python demo.py --input noisy.wav --output clean.wav --precision fp32
+python generate.py --input noisy.wav --output clean.wav --precision fp32
 ```
 
 ### Swift
