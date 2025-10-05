@@ -20,9 +20,21 @@ xcodebuild build -scheme generate -configuration Release -destination 'platform=
 .build/DerivedData/Build/Products/Release/generate noisy.wav --precision fp32
 ```
 
+## Performance
+
+| Framework  | Speed (× faster than input) |
+| ---------- | --------------------------- |
+| Python MLX | **21.5×**                   |
+| Swift MLX  | **14.5×**                   |
+
 ## Models
 
-MLX weights: [starkdmi/MossFormer2_SE_48K_MLX](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX)
+| Precision | Model Size |
+| --------- | ---------- |
+| [FP32](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX/resolve/main/model_fp32.safetensors)      | **221 MB** |
+| [FP16](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX/resolve/main/model_fp16.safetensors)      | **111 MB** |
+
+HuggingFace: [starkdmi/MossFormer2_SE_48K_MLX](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX)
 
 Source: [ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio)
 
