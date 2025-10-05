@@ -14,7 +14,8 @@ let package = Package(
             targets: ["Mossformer2MLXSwift"]),
         .executable(
             name: "generate",
-            targets: ["Generate"]),
+            targets: ["Generate"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.18.0"),
