@@ -77,7 +77,6 @@ public class FFConvM: Module {
         // Follow PyTorch FFConvM.mdl sequential structure
         var output = x
         
-        
         // Cast norm to proper type and call it
         if let layerNorm = norm as? LayerNorm {
             // Use fast LayerNorm for better performance
@@ -89,7 +88,6 @@ public class FFConvM: Module {
         }
         
         // Linear layer
-        
         output = linear(output)         // Index 1
         
         output = silu(output)           // Index 2
@@ -157,7 +155,6 @@ public class ConvModule: Module {
         // Initialize with zeros like Python to ensure weights are loaded from checkpoint
         self.weight = MLXArray.zeros([channels, kernelSize, 1])
         
-        
         super.init()
     }
     
@@ -173,18 +170,13 @@ public class ConvModule: Module {
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
         let residual = x  // (B, T, C)
         
-        // Apply depthwise convolution directly
-        
-        // Apply depthwise convolution directly
-        // MLX conv1d expects (B, T, C) which is our input format
-        let convOut = MLX.conv1d(
+        let convOut = DepthwiseConv1d.apply(
             x,
-            weight,
+            weight: weight,
             stride: 1,
             padding: padding,
             groups: inChannels
-        )  // Output: (B, T, C)
-        
+        )
         
         return residual + convOut
     }
