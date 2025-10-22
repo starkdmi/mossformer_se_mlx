@@ -1,6 +1,8 @@
 import mlx.core as mx
 import mlx.nn as nn
 
+from depthwise_conv1d_kernel import depthwise_conv1d
+
 class ConvModule(nn.Module):
     """
     MLX implementation of ConvModule.
@@ -55,16 +57,14 @@ class ConvModule(nn.Module):
         Returns:
             Output tensor of shape (B, T, C)
         """
-        residual = x  # (B, T, C)
+        residual = x # (B, T, C)
         
-        # Apply depthwise convolution directly
-        # MLX conv1d expects (B, T, C) which is our input format
-        conv_out = mx.conv1d(
+        conv_out = depthwise_conv1d(
             x,
             self.weight,
             stride=1,
             padding=self.padding,
             groups=self.in_channels
-        )  # Output: (B, T, C)
+        ) # Output: (B, T, C)
         
         return residual + conv_out
