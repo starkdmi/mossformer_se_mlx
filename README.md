@@ -24,8 +24,8 @@ xcodebuild build -scheme generate -configuration Release -destination 'platform=
 
 | Framework  | Speed (× faster than input) |
 | ---------- | --------------------------- |
-| Python MLX | **21.5×**                   |
-| Swift MLX  | **14.5×**                   |
+| Python MLX | **25×**                     |
+| Swift MLX  | **30×**                     |
 
 ## Models
 
