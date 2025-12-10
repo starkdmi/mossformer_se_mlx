@@ -6,7 +6,7 @@ High-performance speech enhancement model optimized for Apple Silicon using MLX.
 
 ```bash
 pip install -r requirements.txt
-python demo.py --input noisy.wav --output clean.wav --precision fp32
+python generate.py --input noisy.wav --output clean.wav --precision fp32
 ```
 
 ## Model
