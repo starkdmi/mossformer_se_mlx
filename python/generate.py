@@ -1,4 +1,5 @@
 import os
+import gc
 import time
 import argparse
 import numpy as np
@@ -315,9 +316,19 @@ Example usage:
 
         # Process audio
         print("Processing audio...")
+
+        # Clean run
+        # gc.collect()
+        # mx.clear_cache()
+        # Benchmark begin
+        mx.reset_peak_memory()
         process_start = time.time()
+
         enhanced_audio = enhance_audio(model, args.input, MODEL_CONFIG)
+
+        # Benchmark finish
         process_time = time.time() - process_start
+        peak_mem_bytes = mx.get_peak_memory()
 
         # Save output
         if enhanced_audio.ndim == 2 and enhanced_audio.shape[0] == 1:
@@ -328,6 +339,7 @@ Example usage:
         # Print summary
         audio_duration = enhanced_audio.shape[0] / 48000
         rtf = audio_duration / process_time
+        peak_mem_mb = peak_mem_bytes / (1024 * 1024)
 
         print("\n" + "=" * 60)
         print("Processing complete!")
@@ -335,6 +347,8 @@ Example usage:
         print(f"Audio duration: {audio_duration:.2f}s")
         print(f"Processing time: {process_time:.2f}s")
         print(f"Real-time factor: {rtf:.2f}x")
+        print(f"Peak Memory: {peak_mem_mb:.2f} MB")
+        print("-" * 60)
         print(f"Output saved to: {args.output}")
         print("=" * 60)
 
