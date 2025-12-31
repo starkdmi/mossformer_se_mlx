@@ -1,5 +1,6 @@
 import mlx.core as mx
 
+@mx.compile
 def create_window(win_type: str, win_len: int, periodic: bool = False) -> mx.array:
     """Create window function"""
     if win_type == 'hamming':
@@ -17,6 +18,7 @@ def create_window(win_type: str, win_len: int, periodic: bool = False) -> mx.arr
     else:
         raise ValueError(f"Unsupported window type: {win_type}")
 
+@mx.compile
 def stft(x: mx.array, n_fft: int, hop_length: int, win_length: int, 
          window: mx.array, center: bool = True):
     """
@@ -115,6 +117,7 @@ def create_istft_norm_buffer(n_fft: int, hop_length: int, win_length: int,
     
     return mx.maximum(norm_buffer, 1e-10)
 
+@mx.compile
 def istft(real_part: mx.array, imag_part: mx.array, n_fft: int, 
               hop_length: int, win_length: int, window: mx.array, 
               center: bool = True, audio_length: int = None) -> mx.array:
@@ -168,68 +171,97 @@ def istft(real_part: mx.array, imag_part: mx.array, n_fft: int,
 
 class ISTFTCache:
     """
-    Advanced caching for iSTFT operations. Handles multiple configurations efficiently.
+    Advanced caching for iSTFT operations. Fully vectorized Overlap-Add for MLX. Handles multiple configurations efficiently.
     Automatically caches normalization buffers and position indices for maximum performance.
     """
     def __init__(self):
         self.norm_buffer_cache = {}
         self.position_cache = {}
     
-    def get_norm_buffer(self, n_fft: int, hop_length: int, win_length: int, 
-                       window: mx.array, num_frames: int):
-        """Get cached normalization buffer or create new one"""
-        # Use window hash for cache key since mx.array isn't hashable
-        window_hash = hash(tuple(mx.array(window).tolist()))
-        key = (n_fft, hop_length, win_length, window_hash, num_frames)
-        
-        if key not in self.norm_buffer_cache:
-            self.norm_buffer_cache[key] = create_istft_norm_buffer(
-                n_fft, hop_length, win_length, window, num_frames
-            )
-        return self.norm_buffer_cache[key]
-    
     def get_positions(self, num_frames: int, frame_length: int, hop_length: int):
         """Get cached position indices or create new ones"""
         key = (num_frames, frame_length, hop_length)
         
         if key not in self.position_cache:
+            # Create base indices for one frame sequence
             positions = mx.arange(num_frames)[:, None] * hop_length + mx.arange(frame_length)[None, :]
             self.position_cache[key] = positions.reshape(-1)
         
         return self.position_cache[key]
+
+    def get_norm_buffer(self, n_fft: int, hop_length: int, win_length: int, 
+                       window: mx.array, num_frames: int):
+        """Get cached normalization buffer or create new one"""
+        # Create a unique key for the window configuration
+        # Note: .tolist() is slow, but this only happens once per new configuration
+        window_hash = hash(tuple(window.tolist()))
+        key = (n_fft, hop_length, win_length, window_hash, num_frames)
+        
+        if key not in self.norm_buffer_cache:
+            # Logic inlined to ensure self-containment
+            frame_length = window.shape[0]
+            ola_len = (num_frames - 1) * hop_length + frame_length
+            
+            # Get positions (reuse cache logic)
+            positions_flat = self.get_positions(num_frames, frame_length, hop_length)
+            
+            # Create buffer
+            window_squared = window ** 2
+            norm_buffer = mx.zeros(ola_len, dtype=mx.float32)
+            window_sq_tiled = mx.tile(window_squared, num_frames)
+            
+            # Vectorized scatter for norm buffer
+            norm_buffer = norm_buffer.at[positions_flat].add(window_sq_tiled)
+            norm_buffer = mx.maximum(norm_buffer, 1e-10)
+            
+            self.norm_buffer_cache[key] = norm_buffer
+            
+        return self.norm_buffer_cache[key]
     
     def istft(self, real_part: mx.array, imag_part: mx.array, n_fft: int, 
               hop_length: int, win_length: int, window: mx.array, 
               center: bool = True, audio_length: int = None) -> mx.array:
         """
-        iSTFT with full automatic caching.
-        Same interface as original mlx_istft but with automatic performance optimization.
+        iSTFT with automatic caching and vectorized overlap-add.
         """
-        # Step 1: Get windowed time-domain frames
+        # Robust Window Padding (Safety Check)
+        if window.shape[0] < n_fft:
+            pad = n_fft - window.shape[0]
+            window = mx.concatenate([window, mx.zeros((pad,), dtype=window.dtype)])
+
+        # Inverse FFT
         stft_complex = real_part + 1j * imag_part
         time_frames = mx.fft.irfft(stft_complex.transpose(0, 2, 1), n=n_fft, axis=-1)
+        
+        # Apply synthesis window
         windowed_frames = time_frames * window
         
         batch_size, num_frames, frame_length = windowed_frames.shape
         ola_len = (num_frames - 1) * hop_length + frame_length
         
-        # Step 2: Get cached normalization buffer
+        # Get Cached Items
+        # Note: We pass the *padded* window to ensure the normalization buffer matches
         norm_buffer = self.get_norm_buffer(n_fft, hop_length, win_length, window, num_frames)
-        
-        # Step 3: Get cached position indices
         positions_flat = self.get_positions(num_frames, frame_length, hop_length)
         
-        # Step 4: Fast overlap-add using cached positions
-        output = mx.zeros((batch_size, ola_len), dtype=mx.float32)
-        windowed_flat = windowed_frames.reshape(batch_size, -1)
+        # Vectorized Overlap-Add (The Speedup)
+        # Instead of looping "for b in range(batch_size)", we scatter all at once.
         
-        for b in range(batch_size):
-            output = output.at[b, positions_flat].add(windowed_flat[b])
+        # Create global indices for the entire batch
+        batch_offsets = mx.arange(batch_size) * ola_len
         
-        # Step 5: Use cached normalization
+        # Broadcast positions: (1, P) + (B, 1) -> (B, P)
+        global_indices = positions_flat[None, :] + batch_offsets[:, None]
+        
+        # Flatten everything to 1D for a single GPU operation
+        output = mx.zeros((batch_size * ola_len), dtype=mx.float32)
+        output = output.at[global_indices.reshape(-1)].add(windowed_frames.reshape(-1))
+        output = output.reshape(batch_size, ola_len)
+        
+        # Apply Normalization
         output = output / norm_buffer[None, :]
         
-        # Step 6: Final trimming
+        # Final Trimming
         if center:
             start_cut = n_fft // 2
             output = output[:, start_cut:]
