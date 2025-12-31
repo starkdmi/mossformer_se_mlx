@@ -38,7 +38,11 @@ istft_cache = ISTFTCache()
 
 
 def load_model(precision="fp32"):
-    """Load MossFormer2 model from HuggingFace Hub"""
+    """Load MossFormer2 model from HuggingFace Hub.
+    
+    Args:
+        precision: One of "fp32", "fp16", "int8", "int6", "int4"
+    """
     print(f"Loading MossFormer2 SE 48K model ({precision})...")
 
     # Enable fast LayerNorm optimization
@@ -46,10 +50,22 @@ def load_model(precision="fp32"):
 
     # Initialize model
     model_wrapper = MossFormer2_SE_48K(MODEL_CONFIG)
-
-    # Download and load weights from HuggingFace
-    model_file = f"model_{precision}.safetensors"
-    weights_path = hf_hub_download(repo_id=MODEL_REPO, filename=model_file)
+    
+    # Check if this is a quantized precision
+    quantized_precisions = {"int4": 4, "int6": 6, "int8": 8}
+    is_quantized = precision in quantized_precisions
+    
+    if is_quantized:
+        bits = quantized_precisions[precision]
+        model_file = f"model_{precision}.safetensors"
+        weights_path = hf_hub_download(repo_id=MODEL_REPO, filename=model_file)
+        
+        # Quantize the model structure before loading weights
+        nn.quantize(model_wrapper, group_size=64, bits=bits)
+    else:
+        # Standard fp16/fp32 loading
+        model_file = f"model_{precision}.safetensors"
+        weights_path = hf_hub_download(repo_id=MODEL_REPO, filename=model_file)
 
     weights = mx.load(weights_path)
     model_wrapper.update(tree_unflatten(list(weights.items())))
@@ -284,6 +300,7 @@ def main():
 Example usage:
   python generate.py --input noisy.wav --output clean.wav
   python generate.py --input noisy.wav --output clean.wav --precision fp16
+  python generate.py --input noisy.wav --output clean.wav --precision int4
         """
     )
     parser.add_argument("--input", "-i", type=str, required=True,
@@ -291,7 +308,7 @@ Example usage:
     parser.add_argument("--output", "-o", type=str, required=True,
                         help="Output audio file path")
     parser.add_argument("--precision", "-p", type=str, default="fp32",
-                        choices=["fp16", "fp32"],
+                        choices=["fp16", "fp32", "int4", "int6", "int8"],
                         help="Model precision (default: fp32)")
     args = parser.parse_args()
 
