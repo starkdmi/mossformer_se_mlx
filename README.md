@@ -33,6 +33,9 @@ xcodebuild build -scheme generate -configuration Release -destination 'platform=
 | --------- | ---------- |
 | [FP32](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX/resolve/main/model_fp32.safetensors)      | **221 MB** |
 | [FP16](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX/resolve/main/model_fp16.safetensors)      | **111 MB** |
+| [INT8](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX/resolve/main/model_int8.safetensors)      | **90 MB** |
+| [INT6](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX/resolve/main/model_int6.safetensors)      | **79 MB** |
+| [INT4](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX/resolve/main/model_int4.safetensors)      | **67 MB** |
 
 HuggingFace: [starkdmi/MossFormer2_SE_48K_MLX](https://huggingface.co/starkdmi/MossFormer2_SE_48K_MLX)
 
