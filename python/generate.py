@@ -242,20 +242,23 @@ def decode_one_audio(model, inputs, config):
     return np.array(outputs) / MAX_WAV_VALUE
 
 
-def warmup_model(model, config):
+def warmup_model(model, config, chunked=False):
     """
     Warm up model and MLX operations for optimal performance.
-    First inference is typically 2-3x slower without warmup.
+    Triggers graph compilation for the code path that will be used.
     """
     print("Warming up model...")
     warmup_start = time.time()
 
-    # Create small random audio (0.2 seconds)
-    warmup_samples = 9600
-    warmup_audio = mx.random.uniform(-0.1, 0.1, shape=(1, warmup_samples))
-
-    # Run full inference pipeline to compile all operations
-    _ = decode_one_audio(model, warmup_audio, config)
+    if chunked:
+        # Warmup chunked mode path (1s)
+        window = create_window(config.win_type, config.win_len, periodic=False)
+        chunk_audio = mx.random.uniform(-0.1, 0.1, shape=(48000,)).astype(mx.float32)
+        _ = process_chunk(model, chunk_audio, config, window, 48000)
+    else:
+        # Warmup full mode path (0.5s)
+        warmup_audio = mx.random.uniform(-0.1, 0.1, shape=(1, 24000)).astype(mx.float32)
+        _ = decode_one_audio(model, warmup_audio, config)
 
     warmup_time = time.time() - warmup_start
     print(f"Warmup complete: {warmup_time:.2f}s\n")
@@ -484,8 +487,9 @@ Example usage:
         load_time = time.time() - load_start
         print(f"Model loading time: {load_time:.2f}s\n")
 
-        # Warm up model (optional)
-        warmup_model(model, MODEL_CONFIG)
+        # Warm up model for the mode being used
+        use_chunked = args.chunked or None
+        warmup_model(model, MODEL_CONFIG, chunked=bool(use_chunked))
 
         # Process audio
         print("Processing audio...")
