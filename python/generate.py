@@ -1,5 +1,4 @@
 import os
-import gc
 import time
 import argparse
 import numpy as np
@@ -11,7 +10,7 @@ import mlx.nn as nn
 from mlx.utils import tree_unflatten
 
 from mossformer2_se_wrapper import MossFormer2_SE_48K
-from stft import stft as stft_func, STFTCache, ISTFTCache, create_window
+from stft import stft as stft_func, ISTFTCache, create_window
 from fbank import compute_fbank
 from deltas import compute_deltas
 
@@ -33,7 +32,6 @@ MODEL_CONFIG = argparse.Namespace(
 )
 
 # Global caches for optimal performance
-stft_cache = STFTCache()
 istft_cache = ISTFTCache()
 
 
@@ -263,13 +261,161 @@ def warmup_model(model, config):
     print(f"Warmup complete: {warmup_time:.2f}s\n")
 
 
-def enhance_audio(model, audio_path, config):
-    """Load and enhance audio file"""
+def process_chunk(model, audio_segment, config, window, chunk_length):
+    """Process a single audio chunk through the model."""
+    # Feature extraction
+    fbanks = compute_fbank_optimized(audio_segment, config)
+    fbank_transposed = mx.transpose(fbanks, [1, 0])
+    fbank_delta = optimized_compute_deltas(fbank_transposed)
+    fbank_delta_delta = optimized_compute_deltas(fbank_delta)
+    fbank_delta = mx.transpose(fbank_delta, [1, 0])
+    fbank_delta_delta = mx.transpose(fbank_delta_delta, [1, 0])
+    fbanks = mx.concatenate([fbanks, fbank_delta, fbank_delta_delta], axis=1)
+    fbanks = mx.expand_dims(fbanks, axis=0)
+    
+    # Model inference
+    Out_List = model(fbanks)
+    pred_mask = Out_List[-1][0]
+    
+    # STFT
+    real_part, imag_part = stft_func(
+        audio_segment.reshape(1, -1),
+        config.fft_len, config.win_inc, config.win_len,
+        window, center=False
+    )
+    
+    # Apply mask
+    pred_mask = mx.transpose(pred_mask, [1, 0])
+    pred_mask = mx.expand_dims(pred_mask, axis=-1)
+    spectrum_real = real_part[0] * pred_mask[:, :, 0]
+    spectrum_imag = imag_part[0] * pred_mask[:, :, 0]
+    
+    # iSTFT
+    output_segment = istft_cache.istft(
+        spectrum_real.reshape(1, *spectrum_real.shape),
+        spectrum_imag.reshape(1, *spectrum_imag.shape),
+        config.fft_len, config.win_inc, config.win_len,
+        window, center=False, audio_length=chunk_length
+    )
+    mx.eval(output_segment)
+    
+    return np.array(output_segment[0])
+
+
+def decode_one_audio_chunked(model, inputs, config, chunk_seconds=4.0, overlap=0.25):
+    """
+    Chunked speech enhancement with discard-edges reassembly.
+    
+    Uses sequential processing (batch=1) which is memory-efficient
+    and nearly as fast as batched processing for this model size.
+    
+    Args:
+        model: The model to use for inference
+        inputs: Input audio array
+        config: Model configuration
+        chunk_seconds: Chunk duration in seconds (default: 4.0)
+        overlap: Overlap ratio between chunks (default: 0.25)
+    
+    Returns:
+        Enhanced audio as numpy array
+    """
+    # Convert to numpy
+    if hasattr(inputs, 'numpy'):
+        inputs_np = inputs.numpy()
+    else:
+        inputs_np = inputs
+
+    if inputs_np.ndim == 2:
+        inputs_np = inputs_np[0, :]
+
+    original_len = inputs_np.shape[0]
+    inputs_np = inputs_np * MAX_WAV_VALUE
+
+    window = create_window(config.win_type, config.win_len, periodic=False)
+    
+    # Calculate chunk parameters
+    chunk_samples = int(config.sampling_rate * chunk_seconds)
+    overlap_samples = int(chunk_samples * overlap)
+    stride = chunk_samples - overlap_samples
+    give_up = overlap_samples // 2
+    
+    # For short audio, process directly without chunking
+    if original_len <= chunk_samples:
+        audio = mx.array(inputs_np)
+        result = process_chunk(model, audio, config, window, original_len)
+        return result / MAX_WAV_VALUE
+    
+    # Count chunks
+    num_full_chunks = (original_len - chunk_samples) // stride + 1
+    remaining = original_len - (num_full_chunks - 1) * stride - chunk_samples
+    has_partial = remaining > 0
+    
+    print(f"  Chunked: {num_full_chunks} x {chunk_seconds}s" + 
+          (f" + partial" if has_partial else ""))
+    
+    # Process chunks sequentially
+    chunks = []
+    chunk_starts = []
+    current_idx = 0
+    
+    while current_idx + chunk_samples <= original_len:
+        audio_segment = mx.array(inputs_np[current_idx:current_idx + chunk_samples])
+        chunk_result = process_chunk(model, audio_segment, config, window, chunk_samples)
+        chunks.append(chunk_result)
+        chunk_starts.append(current_idx)
+        current_idx += stride
+    
+    # Handle last partial chunk if any
+    if current_idx < original_len:
+        remaining = original_len - current_idx
+        audio_segment = mx.array(inputs_np[current_idx:])
+        chunk_result = process_chunk(model, audio_segment, config, window, remaining)
+        chunks.append(chunk_result)
+        chunk_starts.append(current_idx)
+    
+    # Reassemble using discard-edges strategy (vectorized)
+    output = np.zeros(original_len)
+    num_chunks = len(chunks)
+    
+    for idx, (chunk, start_idx) in enumerate(zip(chunks, chunk_starts)):
+        chunk_len = len(chunk)
+        is_first = idx == 0
+        is_last = idx == num_chunks - 1
+        
+        # Calculate what range of the chunk to keep
+        if is_last and chunk_len < chunk_samples:
+            keep_start = give_up if not is_first else 0
+            keep_end = chunk_len
+        else:
+            keep_start = 0 if is_first else give_up
+            keep_end = chunk_len - give_up
+        
+        # Copy to output (vectorized)
+        output_start = start_idx + keep_start
+        output_end = min(start_idx + keep_end, original_len)
+        chunk_slice = chunk[keep_start:keep_start + (output_end - output_start)]
+        output[output_start:output_end] = chunk_slice
+    
+    return output / MAX_WAV_VALUE
+
+
+def enhance_audio(model, audio_path, config, chunked=None):
+    """Load and enhance audio file
+    
+    Args:
+        model: The model to use
+        audio_path: Path to input audio file
+        config: Model configuration
+        chunked: Force chunked processing mode. If None, auto-selects based on duration:
+                 - < 60s: Full mode (faster, best quality)
+                 - >= 60s: Chunked mode (4s chunks, 25% overlap, lower RAM)
+    """
     # Load audio
     audio_np, sr = sf.read(audio_path, dtype='float32')
-
+    
+    duration = len(audio_np) / sr
     print(f"  Input: {audio_path}")
-    print(f"  Sample rate: {sr} Hz, Duration: {len(audio_np) / sr:.2f}s")
+    print(f"  Sample rate: {sr} Hz, Duration: {duration:.2f}s")
 
     # Ensure correct shape
     if audio_np.ndim == 1:
@@ -285,9 +431,16 @@ def enhance_audio(model, audio_path, config):
         resample_factor = 48000 / sr
         num_samples = int(audio_np.shape[1] * resample_factor)
         audio_np = signal.resample(audio_np, num_samples, axis=1)
+        duration = num_samples / 48000
 
+    # Auto-select mode based on duration (60s threshold from MossFormer2 paper)
+    use_chunked = chunked if chunked is not None else (duration >= 60)
+    
     # Perform enhancement
-    enhanced_audio = decode_one_audio(model, audio_np, config)
+    if use_chunked:
+        enhanced_audio = decode_one_audio_chunked(model, audio_np, config)
+    else:
+        enhanced_audio = decode_one_audio(model, audio_np, config)
 
     return enhanced_audio
 
@@ -301,6 +454,7 @@ Example usage:
   python generate.py --input noisy.wav --output clean.wav
   python generate.py --input noisy.wav --output clean.wav --precision fp16
   python generate.py --input noisy.wav --output clean.wav --precision int4
+  python generate.py --input noisy.wav --output clean.wav --chunked
         """
     )
     parser.add_argument("--input", "-i", type=str, required=True,
@@ -310,6 +464,8 @@ Example usage:
     parser.add_argument("--precision", "-p", type=str, default="fp32",
                         choices=["fp16", "fp32", "int4", "int6", "int8"],
                         help="Model precision (default: fp32)")
+    parser.add_argument("--chunked", action="store_true",
+                        help="Force chunked processing (auto-enabled for 60s+ audio)")
     args = parser.parse_args()
 
     # Validate input file exists
@@ -341,7 +497,7 @@ Example usage:
         mx.reset_peak_memory()
         process_start = time.time()
 
-        enhanced_audio = enhance_audio(model, args.input, MODEL_CONFIG)
+        enhanced_audio = enhance_audio(model, args.input, MODEL_CONFIG, chunked=args.chunked or None)
 
         # Benchmark finish
         process_time = time.time() - process_start
